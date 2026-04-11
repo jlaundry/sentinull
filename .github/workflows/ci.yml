@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_call:
+
+jobs:
+  test:
+    name: CI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Install Test Toolchain
+        run: |
+          go install github.com/jstemmer/go-junit-report/v2@14d61e6e75e3f3c74551d757ad936e8e88014464  # v2.1.0
+
+      - name: Generate coverage and test report
+        run: |
+          go test -coverprofile cover.out -v 2>&1 ./... | go-junit-report -set-exit-code > report.xml
+          go tool cover -html=cover.out -o coverage.html
+          
+      - name: Test Summary
+        uses: test-summary/action@31493c76ec9e7aa675f1585d3ed6f1da69269a86  # v2.4
+        with:
+          paths: "report.xml"
+
+      - name: Upload Coverage
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage.html
+          path: coverage.html
