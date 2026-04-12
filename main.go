@@ -43,7 +43,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request, cfg config) {
 	}
 
 	if r.URL.Query().Get("api-version") != "2023-01-01" {
-		writeError(w, http.StatusBadRequest, "UnsupportedApiVersion", "The specified api-version is not supported.")
+		writeError(w, http.StatusBadRequest, "UnsupportedApiVersion", fmt.Sprintf("The specified api-version '%s' is not supported.", r.URL.Query().Get("api-version")))
 		return
 	}
 
@@ -135,15 +135,15 @@ func uploadHandler(w http.ResponseWriter, r *http.Request, cfg config) {
 // Signature verification is skipped unless --validate-jwt-signature is configured.
 func validateBearerToken(header, audience string) error {
 	if !strings.HasPrefix(header, "Bearer ") {
-		return errors.New("missing or malformed Authorization header")
+		return errors.New("Authorization value was not a Bearer token")
 	}
 	parts := strings.Split(strings.TrimPrefix(header, "Bearer "), ".")
 	if len(parts) != 3 {
-		return errors.New("malformed JWT")
+		return errors.New("malformed JWT (did not include all 3 parts)")
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return errors.New("malformed JWT payload")
+		return errors.New("malformed JWT (part 1 was not base64 encoded)")
 	}
 	var claims struct {
 		Aud any   `json:"aud"` // string or []string per JWT spec
@@ -151,10 +151,10 @@ func validateBearerToken(header, audience string) error {
 		Nbf int64 `json:"nbf"`
 	}
 	if err := json.Unmarshal(payload, &claims); err != nil {
-		return errors.New("malformed JWT claims")
+		return errors.New("malformed JWT claims (expected aud, exp, and nbf claims)")
 	}
 	if !audContains(claims.Aud, audience) {
-		return errors.New("token audience does not match")
+		return fmt.Errorf("token audience '%s' does not match expected '%s'", claims.Aud, audience)
 	}
 	now := time.Now().Unix()
 	if claims.Exp != 0 && claims.Exp < now {
@@ -183,6 +183,7 @@ func audContains(aud any, want string) bool {
 
 // writeError writes an SDK-compatible JSON error response with the x-ms-error-code header.
 func writeError(w http.ResponseWriter, status int, code, message string) {
+	log.Printf("Returning error code=%s message=\"%s\"", code, message)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("x-ms-error-code", code)
 	w.WriteHeader(status)
