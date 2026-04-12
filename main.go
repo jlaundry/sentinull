@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -183,7 +184,7 @@ func audContains(aud any, want string) bool {
 
 // writeError writes an SDK-compatible JSON error response with the x-ms-error-code header.
 func writeError(w http.ResponseWriter, status int, code, message string) {
-	log.Printf("Returning error code=%s message=\"%s\"", code, message)
+	log.Printf("Returning error code=%s message=%s", code, strconv.Quote(message))
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("x-ms-error-code", code)
 	w.WriteHeader(status)
