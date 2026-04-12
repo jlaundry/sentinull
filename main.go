@@ -23,7 +23,7 @@ type config struct {
 
 func defaultConfig() config {
 	return config{
-		JWTAudience: "https://monitor.azure.com/.default",
+		JWTAudience: "https://monitor.azure.com",
 		ListenAddr:  "localhost:8564",
 	}
 }

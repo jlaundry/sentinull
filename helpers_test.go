@@ -81,7 +81,7 @@ func gzipBytes(t *testing.T, b []byte) []byte {
 func validHeaders() map[string]string {
 	return map[string]string{
 		"Authorization": makeJWT(map[string]any{
-			"aud": "https://monitor.azure.com/.default",
+			"aud": "https://monitor.azure.com",
 			"exp": 9999999999,
 			"nbf": 0,
 		}),

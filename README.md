@@ -36,7 +36,7 @@ Apart from JSON and Schema validation, the following validation is performed:
 
 Sentinull includes a few optional feature flags:
 
-  * `--jwt-audience {aud}` by default, the Bearer JWT aud is expected to be `https://monitor.azure.com/.default` - you may want to change this to mock a regional cloud.
+  * `--jwt-audience {aud}` by default, the Bearer JWT aud is expected to be `https://monitor.azure.com` - you may want to change this to mock a regional cloud.
   * `--listen {address}` defaults to `localhost:8564`
 
 ## References

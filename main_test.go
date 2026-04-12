@@ -53,7 +53,7 @@ func TestUpload_ExpiredToken(t *testing.T) {
 	// exp in the past (epoch 1000)
 	headers := validHeaders()
 	headers["Authorization"] = makeJWT(map[string]any{
-		"aud": "https://monitor.azure.com/.default",
+		"aud": "https://monitor.azure.com",
 		"exp": 1000,
 		"nbf": 0,
 	})
