@@ -34,6 +34,10 @@ Apart from JSON and Schema validation, the following validation is performed:
 
   * Requests adhere to the [1MB maximum size](https://learn.microsoft.com/en-us/azure/azure-monitor/fundamentals/service-limits#logs-ingestion-api) (for either compressed or uncompressed data) - if you submit more than 1MB, you should get a 413 Request Too Large response
 
+Sentinull exposes a small internal diagnostics API under `/internal/*` so integration tests can verify upload traffic and JWT usage.
+
+Use `GET /internal/event_count`, `GET /internal/stream/{stream}/event_count`, and `GET /internal/last_jwt` to inspect request counts, per-stream event metrics, and the last decoded JWT claims.
+
 Sentinull includes a few optional feature flags:
 
   * `--jwt-audience {aud}` by default, the Bearer JWT aud is expected to be `https://monitor.azure.com` - you may want to change this to mock a regional cloud.

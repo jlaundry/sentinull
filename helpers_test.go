@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -31,36 +32,43 @@ func postUpload(t *testing.T, path, body string, headers map[string]string) *htt
 	return postUploadWithConfig(t, path, body, headers, defaultConfig())
 }
 
-// postUploadWithConfig is like postUpload but uses a custom server config.
-func postUploadWithConfig(t *testing.T, path, body string, headers map[string]string, cfg config) *httptest.ResponseRecorder {
+func sendRequest(t *testing.T, handler http.Handler, method, path string, body io.Reader, headers map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
-
-	var req *http.Request
-	if body != "" {
-		req = httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
-	} else {
-		req = httptest.NewRequest(http.MethodPost, path, nil)
-	}
-
+	req := httptest.NewRequest(method, path, body)
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-
 	rr := httptest.NewRecorder()
-	newMux(cfg).ServeHTTP(rr, req)
+	handler.ServeHTTP(rr, req)
 	return rr
+}
+
+// postUploadWithConfig is like postUpload but uses a custom server config.
+func postUploadWithConfig(t *testing.T, path, body string, headers map[string]string, cfg config) *httptest.ResponseRecorder {
+	t.Helper()
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+	return sendRequest(t, newMux(cfg), http.MethodPost, path, reader, headers)
 }
 
 // postUploadBytes sends a raw byte slice body, used for pre-compressed payloads.
 func postUploadBytes(t *testing.T, path string, body []byte, headers map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
-	rr := httptest.NewRecorder()
-	newMux(defaultConfig()).ServeHTTP(rr, req)
-	return rr
+	return sendRequest(t, newMux(defaultConfig()), http.MethodPost, path, bytes.NewReader(body), headers)
+}
+
+// postUploadToHandler sends a POST request to an arbitrary handler.
+func postUploadToHandler(t *testing.T, handler http.Handler, path, body string, headers map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	return sendRequest(t, handler, http.MethodPost, path, strings.NewReader(body), headers)
+}
+
+// getInternal sends a GET request to an internal endpoint.
+func getInternal(t *testing.T, handler http.Handler, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	return sendRequest(t, handler, http.MethodGet, path, nil, nil)
 }
 
 // gzipBytes compresses b using gzip and returns the compressed bytes.

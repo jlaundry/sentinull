@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -321,4 +322,103 @@ func TestUpload_RateLimited(t *testing.T) {
 	// if rr.Header().Get("Retry-After") == "" {
 	//     t.Fatal("expected Retry-After header")
 	// }
+}
+
+func TestInternal_EventCountTracksUploadRequests(t *testing.T) {
+	srv := newServer(defaultConfig())
+	h := srv.mux()
+
+	rr := postUploadToHandler(t, h, validPath, validBody, validHeaders())
+	assertStatus(t, rr, http.StatusNoContent)
+
+	rr = postUploadToHandler(t, h, validPath, validBody, validHeaders())
+	assertStatus(t, rr, http.StatusNoContent)
+
+	rr = getInternal(t, h, "/internal/event_count")
+	assertStatus(t, rr, http.StatusOK)
+
+	var payload map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if got, want := int(payload["count"].(float64)), 2; got != want {
+		t.Fatalf("count: got %d, want %d", got, want)
+	}
+}
+
+func TestInternal_StreamEventCountTracksTotalAndValidated(t *testing.T) {
+	srv := newServer(defaultConfig())
+	h := srv.mux()
+
+	path := "/dataCollectionRules/dcr-accepted/streams/Custom-MyTable?api-version=2023-01-01"
+	assertStatus(t, postUploadToHandler(t, h, path, validBody, validHeaders()), http.StatusNoContent)
+	assertStatus(t, postUploadToHandler(t, h, path, validBody, validHeaders()), http.StatusNoContent)
+	assertStatus(t, postUploadToHandler(t, h, path, validBody, validHeaders()), http.StatusNoContent)
+	assertStatus(t, postUploadToHandler(t, h, path, validBody, validHeaders()), http.StatusNoContent)
+
+	rr := getInternal(t, h, "/internal/stream/Custom-MyTable/event_count")
+	assertStatus(t, rr, http.StatusOK)
+
+	var payload map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if got, want := int(payload["total_events"].(float64)), 4; got != want {
+		t.Fatalf("total_events: got %d, want %d", got, want)
+	}
+	if got, want := int(payload["validated_events"].(float64)), 4; got != want {
+		t.Fatalf("validated_events: got %d, want %d", got, want)
+	}
+
+	path = "/dataCollectionRules/dcr-accepted/streams/Nonexistent-Stream?api-version=2023-01-01"
+	assertStatus(t, postUploadToHandler(t, h, path, validBody, validHeaders()), http.StatusBadRequest)
+
+	rr = getInternal(t, h, "/internal/stream/Nonexistent-Stream/event_count")
+	assertStatus(t, rr, http.StatusOK)
+
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if got, want := int(payload["total_events"].(float64)), 1; got != want {
+		t.Fatalf("total_events: got %d, want %d", got, want)
+	}
+	if got, want := int(payload["validated_events"].(float64)), 0; got != want {
+		t.Fatalf("validated_events: got %d, want %d", got, want)
+	}
+
+	rr = getInternal(t, h, "/internal/event_count")
+	assertStatus(t, rr, http.StatusOK)
+
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if got, want := int(payload["count"].(float64)), 5; got != want {
+		t.Fatalf("count: got %d, want %d", got, want)
+	}
+
+}
+
+func TestInternal_LastJWTReturnsDecodedClaims(t *testing.T) {
+	srv := newServer(defaultConfig())
+	h := srv.mux()
+
+	headers := validHeaders()
+	headers["Authorization"] = makeJWT(map[string]any{
+		"aud": "https://monitor.azure.com",
+		"exp": 9999999999,
+		"nbf": 0,
+		"sub": "test-subject",
+	})
+	assertStatus(t, postUploadToHandler(t, h, validPath, validBody, headers), http.StatusNoContent)
+
+	rr := getInternal(t, h, "/internal/last_jwt")
+	assertStatus(t, rr, http.StatusOK)
+
+	var claims map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &claims); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if got, ok := claims["sub"].(string); !ok || got != "test-subject" {
+		t.Fatalf("expected sub claim to be %q, got %v", "test-subject", claims["sub"])
+	}
 }

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -22,6 +23,19 @@ type config struct {
 	ListenAddr  string
 }
 
+type streamMetrics struct {
+	Total     int `json:"total_events"`
+	Validated int `json:"validated_events"`
+}
+
+type server struct {
+	cfg       config
+	mu        sync.Mutex
+	uploadCnt int
+	streams   map[string]*streamMetrics
+	lastJWT   map[string]any
+}
+
 func defaultConfig() config {
 	return config{
 		JWTAudience: "https://monitor.azure.com",
@@ -29,15 +43,35 @@ func defaultConfig() config {
 	}
 }
 
+func newServer(cfg config) *server {
+	return &server{
+		cfg:     cfg,
+		streams: make(map[string]*streamMetrics),
+		lastJWT: make(map[string]any),
+	}
+}
+
 func newMux(cfg config) *http.ServeMux {
+	return newServer(cfg).mux()
+}
+
+func (s *server) mux() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /dataCollectionRules/{ruleID}/streams/{stream}", func(w http.ResponseWriter, r *http.Request) {
-		uploadHandler(w, r, cfg)
-	})
+	mux.HandleFunc("POST /dataCollectionRules/{ruleID}/streams/{stream}", s.uploadHandler)
+	mux.HandleFunc("GET /internal/event_count", s.internalEventCountHandler)
+	mux.HandleFunc("GET /internal/last_jwt", s.internalLastJWTHandler)
+	mux.HandleFunc("GET /internal/stream/{stream}/event_count", s.internalStreamHandler)
 	return mux
 }
 
-func uploadHandler(w http.ResponseWriter, r *http.Request, cfg config) {
+func (s *server) uploadHandler(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	s.uploadCnt++
+	s.mu.Unlock()
+
+	ruleID := r.PathValue("ruleID")
+	stream := r.PathValue("stream")
+
 	if r.URL.Query().Get("api-version") == "" {
 		writeError(w, http.StatusBadRequest, "MissingApiVersionParameter", "An api-version query parameter is required.")
 		return
@@ -48,7 +82,11 @@ func uploadHandler(w http.ResponseWriter, r *http.Request, cfg config) {
 		return
 	}
 
-	if err := validateBearerToken(r.Header.Get("Authorization"), cfg.JWTAudience); err != nil {
+	claims, err := validateBearerToken(r.Header.Get("Authorization"), s.cfg.JWTAudience)
+	if claims != nil {
+		s.setLastJWT(claims)
+	}
+	if err != nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized", err.Error())
 		return
 	}
@@ -90,8 +128,9 @@ func uploadHandler(w http.ResponseWriter, r *http.Request, cfg config) {
 		return
 	}
 
-	ruleID := r.PathValue("ruleID")
-	stream := r.PathValue("stream")
+	if len(records) > 0 {
+		s.recordStreamTotal(stream, len(records))
+	}
 
 	// --- DCR routing ---
 	switch ruleID {
@@ -127,6 +166,11 @@ func uploadHandler(w http.ResponseWriter, r *http.Request, cfg config) {
 				}
 			}
 		}
+		s.recordStreamValidated(stream, len(records))
+	}
+
+	if ruleID == "dcr-accepted" {
+		s.recordStreamValidated(stream, len(records))
 	}
 
 	w.WriteHeader(http.StatusNoContent)
@@ -134,37 +178,109 @@ func uploadHandler(w http.ResponseWriter, r *http.Request, cfg config) {
 
 // validateBearerToken parses a Bearer JWT and checks the aud, exp, and nbf claims.
 // Signature verification is skipped unless --validate-jwt-signature is configured.
-func validateBearerToken(header, audience string) error {
+func validateBearerToken(header, audience string) (map[string]any, error) {
 	if !strings.HasPrefix(header, "Bearer ") {
-		return errors.New("Authorization value was not a Bearer token")
+		return nil, errors.New("Authorization value was not a Bearer token")
 	}
 	parts := strings.Split(strings.TrimPrefix(header, "Bearer "), ".")
 	if len(parts) != 3 {
-		return errors.New("malformed JWT (did not include all 3 parts)")
+		return nil, errors.New("malformed JWT (did not include all 3 parts)")
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return errors.New("malformed JWT (part 1 was not base64 encoded)")
+		return nil, errors.New("malformed JWT (part 1 was not base64 encoded)")
 	}
-	var claims struct {
+	var claims map[string]any
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return nil, errors.New("malformed JWT claims (expected aud, exp, and nbf claims)")
+	}
+	var validated struct {
 		Aud any   `json:"aud"` // string or []string per JWT spec
 		Exp int64 `json:"exp"`
 		Nbf int64 `json:"nbf"`
 	}
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return errors.New("malformed JWT claims (expected aud, exp, and nbf claims)")
+	if err := json.Unmarshal(payload, &validated); err != nil {
+		return nil, errors.New("malformed JWT claims (expected aud, exp, and nbf claims)")
 	}
-	if !audContains(claims.Aud, audience) {
-		return fmt.Errorf("token audience '%s' does not match expected '%s'", claims.Aud, audience)
+	if !audContains(validated.Aud, audience) {
+		return claims, fmt.Errorf("token audience '%s' does not match expected '%s'", validated.Aud, audience)
 	}
 	now := time.Now().Unix()
-	if claims.Exp != 0 && claims.Exp < now {
-		return errors.New("token has expired")
+	if validated.Exp != 0 && validated.Exp < now {
+		return claims, errors.New("token has expired")
 	}
-	if claims.Nbf != 0 && claims.Nbf > now {
-		return errors.New("token is not yet valid")
+	if validated.Nbf != 0 && validated.Nbf > now {
+		return claims, errors.New("token is not yet valid")
 	}
-	return nil
+	return claims, nil
+}
+
+func (s *server) setLastJWT(claims map[string]any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastJWT = claims
+}
+
+func (s *server) recordStreamTotal(stream string, count int) {
+	if count == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	stats := s.streams[stream]
+	if stats == nil {
+		stats = &streamMetrics{}
+		s.streams[stream] = stats
+	}
+	stats.Total += count
+}
+
+func (s *server) recordStreamValidated(stream string, count int) {
+	if count == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	stats := s.streams[stream]
+	if stats == nil {
+		stats = &streamMetrics{}
+		s.streams[stream] = stats
+	}
+	stats.Validated += count
+}
+
+func (s *server) internalEventCountHandler(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	count := s.uploadCnt
+	s.mu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"count": count})
+}
+
+func (s *server) internalLastJWTHandler(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	claims := s.lastJWT
+	s.mu.Unlock()
+	if claims == nil {
+		claims = map[string]any{}
+	}
+	writeJSON(w, http.StatusOK, claims)
+}
+
+func (s *server) internalStreamHandler(w http.ResponseWriter, r *http.Request) {
+	stream := r.PathValue("stream")
+	s.mu.Lock()
+	stats := s.streams[stream]
+	s.mu.Unlock()
+	if stats == nil {
+		stats = &streamMetrics{}
+	}
+	writeJSON(w, http.StatusOK, stats)
+}
+
+func writeJSON(w http.ResponseWriter, status int, payload any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(payload)
 }
 
 // audContains checks whether want is present in the aud claim (string or []string).
