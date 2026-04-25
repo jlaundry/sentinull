@@ -5,16 +5,14 @@ on:
     inputs:
       release_tag:
         description: 'Draft release tag'
-        required: false
-        default: 'v0.1.0'
+        required: true
       release_name:
         description: 'Draft release title'
         required: false
-        default: 'Sentinull Draft Release'
+        default: 'Sentinull'
       release_body:
         description: 'Draft release notes'
         required: false
-        default: 'Draft release with container image artifacts.'
 
 permissions:
   contents: write
@@ -32,19 +30,19 @@ jobs:
       contents: write
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push container image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile
@@ -52,13 +50,13 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository_owner }}/sentinull:${{ github.event.inputs.release_tag }}
             ghcr.io/${{ github.repository_owner }}/sentinull:latest
-      - name: Create draft GitHub release
-        uses: actions/create-release@v1
-        with:
-          tag_name: ${{ github.event.inputs.release_tag }}
-          release_name: ${{ github.event.inputs.release_name }}
-          body: ${{ github.event.inputs.release_body }}
-          draft: true
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # - name: Create draft GitHub release
+      #   uses: actions/create-release@v1
+      #   with:
+      #     tag_name: ${{ github.event.inputs.release_tag }}
+      #     release_name: ${{ github.event.inputs.release_name }}
+      #     body: ${{ github.event.inputs.release_body }}
+      #     draft: true
+      #     prerelease: false
+      #   env:
+      #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
