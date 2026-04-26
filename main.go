@@ -10,6 +10,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -312,11 +314,33 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 	})
 }
 
-func main() {
+func parseConfig(args []string) (config, error) {
 	cfg := defaultConfig()
-	flag.StringVar(&cfg.JWTAudience, "jwt-audience", cfg.JWTAudience, "Expected JWT aud claim value")
-	flag.StringVar(&cfg.ListenAddr, "listen", cfg.ListenAddr, "Address and port to listen on")
-	flag.Parse()
+	fs := flag.NewFlagSet("sentinull", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&cfg.JWTAudience, "jwt-audience", cfg.JWTAudience, "Expected JWT aud claim value")
+	fs.StringVar(&cfg.ListenAddr, "listen", cfg.ListenAddr, "Address and port to listen on")
+	if err := fs.Parse(normalizeArgs(args)); err != nil {
+		return config{}, err
+	}
+	return cfg, nil
+}
+
+func normalizeArgs(args []string) []string {
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		return args
+	}
+	if filepath.Base(args[0]) == "sentinull" {
+		return args[1:]
+	}
+	return args
+}
+
+func main() {
+	cfg, err := parseConfig(os.Args[1:])
+	if err != nil {
+		log.Fatalf("invalid flags: %v", err)
+	}
 
 	log.Printf("Sentinull listening on %s", cfg.ListenAddr)
 	if err := http.ListenAndServe(cfg.ListenAddr, newMux(cfg)); err != nil {

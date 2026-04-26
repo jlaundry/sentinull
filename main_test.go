@@ -422,3 +422,26 @@ func TestInternal_LastJWTReturnsDecodedClaims(t *testing.T) {
 		t.Fatalf("expected sub claim to be %q, got %v", "test-subject", claims["sub"])
 	}
 }
+
+func TestParseConfig_AllowsComposeStyleCommandArgs(t *testing.T) {
+	cfg, err := parseConfig([]string{"sentinull", "--listen", "0.0.0.0:5555"})
+	if err != nil {
+		t.Fatalf("parseConfig returned error: %v", err)
+	}
+	if got, want := cfg.ListenAddr, "0.0.0.0:5555"; got != want {
+		t.Fatalf("ListenAddr: got %q, want %q", got, want)
+	}
+}
+
+func TestParseConfig_KeepsNormalFlagParsing(t *testing.T) {
+	cfg, err := parseConfig([]string{"--listen", "0.0.0.0:5555", "--jwt-audience", "https://monitor.azure.cn"})
+	if err != nil {
+		t.Fatalf("parseConfig returned error: %v", err)
+	}
+	if got, want := cfg.ListenAddr, "0.0.0.0:5555"; got != want {
+		t.Fatalf("ListenAddr: got %q, want %q", got, want)
+	}
+	if got, want := cfg.JWTAudience, "https://monitor.azure.cn"; got != want {
+		t.Fatalf("JWTAudience: got %q, want %q", got, want)
+	}
+}
